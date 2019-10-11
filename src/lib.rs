@@ -16,9 +16,9 @@ extern crate url;
 extern crate xmltree;
 
 #[cfg(feature = "aio")]
-extern crate http;
-#[cfg(feature = "aio")]
 extern crate futures;
+#[cfg(feature = "aio")]
+extern crate http;
 #[cfg(feature = "aio")]
 extern crate hyper;
 #[cfg(feature = "aio")]
@@ -27,13 +27,14 @@ extern crate tokio;
 extern crate tokio_retry;
 
 // data structures
-pub use self::errors::{Result, Error};
-pub use self::errors::{AddAnyPortError, AddPortError, GetExternalIpError, RemovePortError, RequestError, SearchError};
-pub use self::gateway::Gateway;
 pub use self::common::SearchOptions;
+pub use self::errors::{AddAnyPortError, AddPortError, GetExternalIpError, RemovePortError, RequestError, SearchError};
+pub use self::errors::{Error, Result};
+pub use self::gateway::Gateway;
 
 // search of gateway
 pub use self::search::search_gateway;
+pub use self::search::search_multi_gateways;
 
 #[cfg(feature = "aio")]
 pub mod aio;

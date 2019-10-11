@@ -1,5 +1,7 @@
+use std::io;
 use std::net::{SocketAddrV4, UdpSocket};
 use std::str;
+use std::time::Instant;
 
 use common::{messages, parsing, SearchOptions};
 use errors::SearchError;
@@ -36,16 +38,84 @@ pub fn search_gateway(options: SearchOptions) -> Result<Gateway, SearchError> {
 
         if let Ok(control_url) = get_control_url(&location) {
             // Defaults to using the first control url.
-            if control_url.len() > 0{
+            if control_url.len() > 0 {
                 return Ok(Gateway {
-                addr: location.0,
-                control_url: control_url[0].clone(),
+                    addr: location.0,
+                    control_url: control_url[0].clone(),
                 });
             } else {
                 return Err(SearchError::InvalidResponse);
             }
         }
     }
+}
+
+/// Search multiple gateways, using the given `SearchOptions`.
+///
+/// The default `SearchOptions` should suffice in most cases.
+/// It can be created with `Default::default()` or `SearchOptions::default()`.
+///
+/// # Example
+/// ```no_run
+/// use igd::{search_multi_gateways, SearchOptions, Result};
+///
+/// fn main() -> Result {
+///     let gateways = search_multi_gateways(Default::default())?;
+///     for gateway in gateways {
+///         let ip = gateway.get_external_ip()?;
+///         println!("External IP address: {}", ip);
+///     }
+///     Ok(())
+/// }
+/// ```
+pub fn search_multi_gateways(options: SearchOptions) -> Result<Vec<Gateway>, SearchError> {
+    let socket = UdpSocket::bind(options.bind_addr)?;
+
+    socket.send_to(messages::SEARCH_REQUEST.as_bytes(), options.broadcast_address)?;
+
+    let begin = Instant::now();
+    let mut gateways = vec![];
+    if let Some(timeout) = options.timeout {
+        loop {
+            let now = Instant::now();
+            if now >= begin + timeout {
+                break;
+            }
+            let timeout = Some(timeout - (now - begin));
+
+            socket.set_read_timeout(timeout)?;
+
+            let mut buf = [0u8; 1500];
+            match socket.recv_from(&mut buf) {
+                Ok((read, _)) => {
+                    if let Ok(text) = str::from_utf8(&buf[..read]) {
+                        if let Ok(location) = parsing::parse_search_result(text) {
+                            if let Ok(control_url) = get_control_url(&location) {
+                                // Defaults to using the first control url.
+                                if control_url.len() > 0 {
+                                    let gateway = Gateway {
+                                        addr: location.0,
+                                        control_url: control_url[0].clone(),
+                                    };
+                                    gateways.push(gateway);
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    if e.kind() != io::ErrorKind::WouldBlock || e.kind() != io::ErrorKind::TimedOut {
+                        break;
+                    }
+                }
+            }
+        }
+    } else {
+        let gateway = search_gateway(options)?;
+        gateways.push(gateway);
+    }
+
+    Ok(gateways)
 }
 
 pub fn get_control_urls(options: SearchOptions) -> Result<Vec<String>, SearchError> {
@@ -57,10 +127,10 @@ pub fn get_control_urls(options: SearchOptions) -> Result<Vec<String>, SearchErr
         let mut buf = [0u8; 1500];
         let (read, _) = socket.recv_from(&mut buf)?;
         let text = str::from_utf8(&buf[..read])?;
-    
+
         let location = parsing::parse_search_result(text)?;
         if let Ok(control_url) = get_control_url(&location) {
-            if control_url.len() > 0{
+            if control_url.len() > 0 {
                 return Ok(control_url);
             } else {
                 return Err(SearchError::InvalidResponse);
@@ -73,12 +143,11 @@ pub fn get_control_urls(options: SearchOptions) -> Result<Vec<String>, SearchErr
     A bit of an ugly temporary workaround, basically the idea is to use get_control_urls() and then call
     search_gateway() with a valid control url. Allows the user to select the interface to use.
 */
-pub fn get_gateway_with_control_url(options: SearchOptions, url: &str) -> Result<Gateway, SearchError>{
+pub fn get_gateway_with_control_url(options: SearchOptions, url: &str) -> Result<Gateway, SearchError> {
     let mut gateway = search_gateway(options)?;
     gateway.control_url = String::from(url);
     Ok(gateway)
 }
-
 
 fn get_control_url(location: &(SocketAddrV4, String)) -> Result<Vec<String>, SearchError> {
     let url = format!("http://{}:{}{}", location.0.ip(), location.0.port(), location.1);
