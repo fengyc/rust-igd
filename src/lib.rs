@@ -35,6 +35,7 @@ pub use self::gateway::Gateway;
 
 // search of gateway
 pub use self::search::search_gateway;
+pub use self::search::search_multi_gateways;
 
 #[cfg(feature = "aio")]
 pub mod aio;
