@@ -1,11 +1,12 @@
-use std::io;
+use std::collections::HashMap;
 use std::net::{SocketAddrV4, UdpSocket};
 use std::str;
 use std::time::Instant;
+use std::io;
 
-use common::{messages, parsing, SearchOptions};
-use errors::SearchError;
-use gateway::Gateway;
+use crate::common::{messages, parsing, SearchOptions};
+use crate::errors::SearchError;
+use crate::gateway::Gateway;
 
 /// Search gateway, using the given `SearchOptions`.
 ///
@@ -34,21 +35,45 @@ pub fn search_gateway(options: SearchOptions) -> Result<Gateway, SearchError> {
         let (read, _) = socket.recv_from(&mut buf)?;
         let text = str::from_utf8(&buf[..read])?;
 
-        let location = parsing::parse_search_result(text)?;
+        let (addr, root_url) = parsing::parse_search_result(text)?;
 
-        if let Ok(control_url) = get_control_url(&location) {
-            // Defaults to using the first control url.
-            if control_url.len() > 0 {
-                return Ok(Gateway {
-                    addr: location.0,
-                    control_url: control_url[0].clone(),
-                });
-            } else {
-                return Err(SearchError::InvalidResponse);
-            }
-        }
+        let (control_schema_url, control_url) = match get_control_urls(&addr, &root_url) {
+            Ok(o) => o,
+            Err(..) => continue,
+        };
+
+        let control_schema = match get_schemas(&addr, &control_schema_url) {
+            Ok(o) => o,
+            Err(..) => continue,
+        };
+
+        return Ok(Gateway {
+            addr,
+            root_url,
+            control_url,
+            control_schema_url,
+            control_schema,
+        });
     }
 }
+
+fn get_control_urls(addr: &SocketAddrV4, root_url: &str) -> Result<(String, String), SearchError> {
+    let url = format!("http://{}:{}{}", addr.ip(), addr.port(), root_url);
+    let response = attohttpc::get(&url).send()?;
+    parsing::parse_control_urls(&response.bytes()?[..])
+}
+
+fn get_schemas(addr: &SocketAddrV4, control_schema_url: &str) -> Result<HashMap<String, Vec<String>>, SearchError> {
+    let url = format!("http://{}:{}{}", addr.ip(), addr.port(), control_schema_url);
+    let response = attohttpc::get(&url).send()?;
+    parsing::parse_schemas(&response.bytes()?[..])
+}
+
+// #[test]
+// fn test_get_control_urls(){
+//     // This test will fail if upnp is disabled on the default interface ( default gateway )
+//     assert_eq!(get_control_urls(SearchOptions::default()).unwrap().len() > 0, true);
+// }
 
 /// Search multiple gateways, using the given `SearchOptions`.
 ///
@@ -82,24 +107,29 @@ pub fn search_multi_gateways(options: SearchOptions) -> Result<Vec<Gateway>, Sea
                 break;
             }
             let timeout = Some(timeout - (now - begin));
-
             socket.set_read_timeout(timeout)?;
 
             let mut buf = [0u8; 1500];
             match socket.recv_from(&mut buf) {
                 Ok((read, _)) => {
                     if let Ok(text) = str::from_utf8(&buf[..read]) {
-                        if let Ok(location) = parsing::parse_search_result(text) {
-                            if let Ok(control_url) = get_control_url(&location) {
-                                // Defaults to using the first control url.
-                                if control_url.len() > 0 {
-                                    let gateway = Gateway {
-                                        addr: location.0,
-                                        control_url: control_url[0].clone(),
-                                    };
-                                    gateways.push(gateway);
-                                }
-                            }
+                        if let Ok((addr, root_url)) = parsing::parse_search_result(text) {
+                            let (control_schema_url, control_url) = match get_control_urls(&addr, &root_url) {
+                                Ok(o) => o,
+                                Err(..) => continue,
+                            };
+                            let control_schema = match get_schemas(&addr, &control_schema_url) {
+                                Ok(o) => o,
+                                Err(..) => continue,
+                            };
+                            let gateway = Gateway {
+                                addr,
+                                root_url,
+                                control_url,
+                                control_schema_url,
+                                control_schema,
+                            };
+                            gateways.push(gateway);
                         }
                     }
                 }
@@ -117,47 +147,3 @@ pub fn search_multi_gateways(options: SearchOptions) -> Result<Vec<Gateway>, Sea
 
     Ok(gateways)
 }
-
-pub fn get_control_urls(options: SearchOptions) -> Result<Vec<String>, SearchError> {
-    let socket = UdpSocket::bind(options.bind_addr)?;
-    socket.set_read_timeout(options.timeout)?;
-
-    socket.send_to(messages::SEARCH_REQUEST.as_bytes(), options.broadcast_address)?;
-    loop {
-        let mut buf = [0u8; 1500];
-        let (read, _) = socket.recv_from(&mut buf)?;
-        let text = str::from_utf8(&buf[..read])?;
-
-        let location = parsing::parse_search_result(text)?;
-        if let Ok(control_url) = get_control_url(&location) {
-            if control_url.len() > 0 {
-                return Ok(control_url);
-            } else {
-                return Err(SearchError::InvalidResponse);
-            }
-        }
-    }
-}
-
-/*
-    A bit of an ugly temporary workaround, basically the idea is to use get_control_urls() and then call
-    search_gateway() with a valid control url. Allows the user to select the interface to use.
-*/
-pub fn get_gateway_with_control_url(options: SearchOptions, url: &str) -> Result<Gateway, SearchError> {
-    let mut gateway = search_gateway(options)?;
-    gateway.control_url = String::from(url);
-    Ok(gateway)
-}
-
-fn get_control_url(location: &(SocketAddrV4, String)) -> Result<Vec<String>, SearchError> {
-    let url = format!("http://{}:{}{}", location.0.ip(), location.0.port(), location.1);
-    let response = attohttpc::get(&url).send()?;
-    let res = parsing::parse_control_url(&response.bytes()?[..]);
-    res
-}
-
-// #[test]
-// fn test_get_control_urls(){
-//     // This test will fail if upnp is disabled on the default interface ( default gateway )
-//     assert_eq!(get_control_urls(SearchOptions::default()).unwrap().len() > 0, true);
-// }

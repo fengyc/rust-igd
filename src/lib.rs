@@ -5,7 +5,6 @@
 //! You can then communicate with the device via this object.
 
 extern crate attohttpc;
-#[cfg(feature = "aio")]
 #[macro_use]
 extern crate log;
 #[cfg(feature = "aio")]
@@ -23,18 +22,19 @@ extern crate http;
 extern crate hyper;
 #[cfg(feature = "aio")]
 extern crate tokio;
-#[cfg(feature = "aio")]
-extern crate tokio_retry;
 
 // data structures
+pub use self::common::parsing::PortMappingEntry;
 pub use self::common::SearchOptions;
-pub use self::errors::{AddAnyPortError, AddPortError, GetExternalIpError, RemovePortError, RequestError, SearchError};
+pub use self::errors::{
+    AddAnyPortError, AddPortError, GetExternalIpError, GetGenericPortMappingEntryError, RemovePortError, RequestError,
+    SearchError,
+};
 pub use self::errors::{Error, Result};
 pub use self::gateway::Gateway;
 
 // search of gateway
 pub use self::search::search_gateway;
-pub use self::search::search_multi_gateways;
 
 #[cfg(feature = "aio")]
 pub mod aio;
